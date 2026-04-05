@@ -3,11 +3,15 @@ package radiussrv
 import (
 	"crypto/md5"
 	"crypto/tls"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"layeh.com/radius"
 
@@ -17,9 +21,6 @@ import (
 
 const (
 	MessageAuthenticatorType = 80
-	MSCHAPChallengeType      = 11
-	MSCHAP2ResponseType      = 25
-	MSCHAP2SuccessType       = 26
 )
 
 type Server struct {
@@ -30,43 +31,97 @@ type Server struct {
 	DisableMsgAuth      bool
 	DisableChallenge    bool
 	Debug               bool
-	MSCHAPEnabled       bool
 	PAPEnabled          bool
 	ChallengeStateStore *ChallengeStateStore
 }
 
-func (s *Server) HandlePacket(packet *radius.Packet, addr net.Addr, conn *net.UDPConn, secret []byte) {
-	if s.MSCHAPEnabled {
-		if s.Debug {
-			log.Printf("[DEBUG] Handling MS-CHAPv2 for %v", addr)
+// addScopeAttributes adds RADIUS attributes (standard and vendor-specific) to the
+// response packet based on the user's roles/groups/scopes matched against the scope_radius_map.
+func (s *Server) addScopeAttributes(resp *radius.Packet, userRoles []string) {
+	if s.ScopeRadiusMap == nil || len(userRoles) == 0 {
+		return
+	}
+	for scopeKey, attrs := range s.ScopeRadiusMap {
+		matched := false
+		if strings.HasPrefix(scopeKey, "re:") {
+			pattern := strings.TrimPrefix(scopeKey, "re:")
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				if s.Debug {
+					log.Printf("[DEBUG] Invalid regex in scope_radius_map: %s: %v", pattern, err)
+				}
+				continue
+			}
+			for _, role := range userRoles {
+				if re.MatchString(role) {
+					matched = true
+					break
+				}
+			}
+		} else {
+			for _, role := range userRoles {
+				if role == scopeKey {
+					matched = true
+					break
+				}
+			}
 		}
-		usernameRaw := packet.Get(1) // User-Name
-		challenge := packet.Get(MSCHAPChallengeType)
-		response := packet.Get(MSCHAP2ResponseType)
-		username := string(usernameRaw)
-		if len(challenge) > 0 && len(response) > 0 {
-			ok, _, _, errMsg := ValidateMSCHAPv2(challenge, response, username, "testpass") // Replace with real password lookup
-			var resp *radius.Packet
-			if ok {
-				if s.Debug {
-					log.Printf("[DEBUG] MS-CHAPv2 success for %s", username)
+		if !matched {
+			continue
+		}
+		for _, attr := range attrs {
+			value := encodeAttributeValue(attr.Value, attr.ValueType)
+			if attr.Vendor > 0 {
+				// Vendor-Specific Attribute: encode as sub-attribute TLV
+				subAttr := make([]byte, 2+len(value))
+				subAttr[0] = byte(attr.Attribute)
+				subAttr[1] = byte(2 + len(value))
+				copy(subAttr[2:], value)
+				vsa, err := radius.NewVendorSpecific(attr.Vendor, radius.Attribute(subAttr))
+				if err != nil {
+					if s.Debug {
+						log.Printf("[DEBUG] Failed to encode VSA vendor=%d attr=%d: %v", attr.Vendor, attr.Attribute, err)
+					}
+					continue
 				}
-				resp = radius.New(radius.CodeAccessAccept, secret)
+				resp.Add(26, vsa)
+				if s.Debug {
+					log.Printf("[DEBUG] Added VSA: vendor=%d, attribute=%d, value=%s", attr.Vendor, attr.Attribute, attr.Value)
+				}
 			} else {
+				resp.Add(radius.Type(attr.Attribute), value)
 				if s.Debug {
-					log.Printf("[DEBUG] MS-CHAPv2 failed for %s: %s", username, errMsg)
+					log.Printf("[DEBUG] Added attribute: type=%d, value=%s", attr.Attribute, attr.Value)
 				}
-				resp = radius.New(radius.CodeAccessReject, secret)
 			}
-			resp.Identifier = packet.Identifier
-			resp.Authenticator = packet.Authenticator // Set authenticator for response
-			b, err := resp.Encode()
-			if err == nil {
-				conn.WriteTo(b, addr)
-			}
-			return
 		}
 	}
+}
+
+func encodeAttributeValue(value, valueType string) []byte {
+	switch valueType {
+	case "integer":
+		n, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return []byte(value)
+		}
+		b := make([]byte, 4)
+		binary.BigEndian.PutUint32(b, uint32(n))
+		return b
+	case "ipaddr":
+		ip := net.ParseIP(value)
+		if ip != nil {
+			if ip4 := ip.To4(); ip4 != nil {
+				return []byte(ip4)
+			}
+		}
+		return []byte(value)
+	default:
+		return []byte(value)
+	}
+}
+
+func (s *Server) HandlePacket(packet *radius.Packet, addr net.Addr, conn *net.UDPConn, secret []byte) {
 	if s.PAPEnabled {
 		if s.Debug {
 			log.Printf("[DEBUG] Handling PAP for %v", addr)
@@ -112,12 +167,13 @@ func (s *Server) HandlePacket(packet *radius.Packet, addr net.Addr, conn *net.UD
 								log.Printf("[DEBUG] Found challenge state for %s", sess.Username)
 							}
 							otp = password // In challenge-response, password field contains OTP
-							ok, err := s.Keycloak.AuthenticateUser(sess.Username, sess.Password, otp)
+							ok, roles, err := s.Keycloak.AuthenticateUser(sess.Username, sess.Password, otp)
 							var resp *radius.Packet
 							if ok && err == nil {
 								resp = radius.New(radius.CodeAccessAccept, secret)
+								s.addScopeAttributes(resp, roles)
 								if s.Debug {
-									log.Printf("[DEBUG] OTP challenge success for %s", sess.Username)
+									log.Printf("[DEBUG] OTP challenge success for %s (roles: %v)", sess.Username, roles)
 								}
 							} else {
 								resp = radius.New(radius.CodeAccessReject, secret)
@@ -140,21 +196,33 @@ func (s *Server) HandlePacket(packet *radius.Packet, addr net.Addr, conn *net.UD
 					log.Printf("[DEBUG] DisableChallenge: %v", s.DisableChallenge)
 				}
 				if s.DisableChallenge {
-					if len(password) > 6 {
-						otp = password[len(password)-6:]
-						userPassword = password[:len(password)-6]
+					if len(password) <= 6 {
+						if s.Debug {
+							log.Printf("[DEBUG] Password too short for OTP split for %s", username)
+						}
+						resp := radius.New(radius.CodeAccessReject, secret)
+						resp.Identifier = packet.Identifier
+						resp.Authenticator = packet.Authenticator
+						b, err := resp.Encode()
+						if err == nil {
+							conn.WriteTo(b, addr)
+						}
+						return
 					}
+					otp = password[len(password)-6:]
+					userPassword = password[:len(password)-6]
 					if s.Debug {
-						log.Printf("[DEBUG] Split password: '%s', otp: '%s'", userPassword, otp)
+						log.Printf("[DEBUG] Split password length: %d, otp length: %d", len(userPassword), len(otp))
 					}
-					ok, err := s.Keycloak.AuthenticateUser(username, userPassword, otp)
+					ok, roles, err := s.Keycloak.AuthenticateUser(username, userPassword, otp)
 					otpOk := ok && err == nil
 					var resp *radius.Packet
 					if ok && otpOk {
 						if s.Debug {
-							log.Printf("[DEBUG] PAP+OTP success for %s (Keycloak)", username)
+							log.Printf("[DEBUG] PAP+OTP success for %s (Keycloak, roles: %v)", username, roles)
 						}
 						resp = radius.New(radius.CodeAccessAccept, secret)
+						s.addScopeAttributes(resp, roles)
 					} else {
 						if s.Debug {
 							log.Printf("[DEBUG] PAP+OTP failed for %s: %v", username, err)
@@ -177,7 +245,11 @@ func (s *Server) HandlePacket(packet *radius.Packet, addr net.Addr, conn *net.UD
 					if s.ChallengeStateStore == nil {
 						s.ChallengeStateStore = NewChallengeStateStore()
 					}
-					state := GenerateRandomState()
+					state, err := GenerateRandomState()
+					if err != nil {
+						log.Printf("Failed to generate challenge state: %v", err)
+						return
+					}
 					s.ChallengeStateStore.Set(state, ChallengeSession{Username: username, Password: password})
 					resp := radius.New(radius.CodeAccessChallenge, secret)
 					resp.Identifier = packet.Identifier
@@ -192,13 +264,14 @@ func (s *Server) HandlePacket(packet *radius.Packet, addr net.Addr, conn *net.UD
 				}
 			} else {
 				// Standard PAP (no OTP)
-				ok, err := s.Keycloak.AuthenticateUser(username, password)
+				ok, roles, err := s.Keycloak.AuthenticateUser(username, password)
 				var resp *radius.Packet
 				if ok {
 					if s.Debug {
-						log.Printf("[DEBUG] PAP success for %s (Keycloak)", username)
+						log.Printf("[DEBUG] PAP success for %s (Keycloak, roles: %v)", username, roles)
 					}
 					resp = radius.New(radius.CodeAccessAccept, secret)
+					s.addScopeAttributes(resp, roles)
 				} else {
 					if s.Debug {
 						log.Printf("[DEBUG] PAP failed for %s: %v", username, err)
@@ -246,14 +319,14 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 				}
 				for key, cfg := range s.Clients {
 					if s.Debug {
-						log.Printf("[DEBUG] Checking client key: %s, secret: %s", key, cfg.Secret)
+						log.Printf("[DEBUG] Checking client key: %s", key)
 					}
 					// Try as CIDR
 					_, ipnet, err := net.ParseCIDR(key)
 					if err == nil && ipnet.Contains(udpAddr.IP) {
 						secret = cfg.Secret
 						if s.Debug {
-							log.Printf("[DEBUG] Matched CIDR %s for %s, using secret: %s", key, udpAddr.IP, secret)
+							log.Printf("[DEBUG] Matched CIDR %s for %s", key, udpAddr.IP)
 						}
 						break
 					}
@@ -261,7 +334,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 					if net.ParseIP(key) != nil && net.ParseIP(key).Equal(udpAddr.IP) {
 						secret = cfg.Secret
 						if s.Debug {
-							log.Printf("[DEBUG] Matched IP %s for %s, using secret: %s", key, udpAddr.IP, secret)
+							log.Printf("[DEBUG] Matched IP %s for %s", key, udpAddr.IP)
 						}
 						break
 					}
@@ -356,4 +429,3 @@ func ValidateOTP(username, otp string, kc *keycloak.KeycloakAPI) bool {
 	return false
 }
 
-// ...move MS-CHAPv2, challenge state, and utility functions here...
