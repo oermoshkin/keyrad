@@ -29,7 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const Version = "1.1.0dev1"
+const Version = "1.1.1"
 const Author = "Marco Moenig <marco@sec73.io>"
 
 func main() {
@@ -47,7 +47,7 @@ func main() {
 	flag.BoolVar(&disableChallengeResponse, "disable-challenge-response", false, "Disable RADIUS challenge-response and use <password><otp> style for OTP users")
 	flag.BoolVar(&debug, "debug", false, "Enable debug output for RADIUS and Keycloak communication")
 	flag.BoolVar(&showVersion, "version", false, "Show version and author information")
-flag.BoolVar(&papEnabled, "pap", true, "Enable PAP authentication")
+	flag.BoolVar(&papEnabled, "pap", true, "Enable PAP authentication")
 	flag.Parse()
 	if showVersion {
 		fmt.Printf("keyrad version %s\nAuthor: %s\n", Version, Author)
