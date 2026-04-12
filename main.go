@@ -146,7 +146,15 @@ func main() {
 		listenAddr = "0.0.0.0:1812"
 	}
 
-	logger.Debug("Listening on " + listenAddr)
+	// Info (not Debug): visible under default log level in Docker/Kubernetes without -debug.
+	logger.Info("keyrad starting",
+		zap.String("version", Version),
+		zap.String("listen_addr", listenAddr),
+		zap.String("config", keycloakConfigPath),
+		zap.String("clients_conf", clientsConfPath),
+		zap.Bool("pap", papEnabled),
+		zap.Bool("debug_flag", debug),
+	)
 
 	if err := srv.ListenAndServe(listenAddr); err != nil {
 		log.Fatalf("RADIUS server error: %v", err)
