@@ -17,27 +17,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type ctxKeyRequestID struct{}
-
-// WithRequestID returns a child context carrying requestID for structured logs in KeycloakAPI methods.
-func WithRequestID(ctx context.Context, requestID string) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if requestID == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, ctxKeyRequestID{}, requestID)
-}
-
-func requestIDFromContext(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	s, _ := ctx.Value(ctxKeyRequestID{}).(string)
-	return s
-}
-
 // KeycloakAPI holds OAuth2/OpenID settings and an HTTP client for Keycloak.
 // Admin access tokens are cached in memory until shortly before expiry.
 type KeycloakAPI struct {
