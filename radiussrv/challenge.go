@@ -40,7 +40,7 @@ func NewChallengeStateStore() *ChallengeStateStore {
 	return s
 }
 
-// Get returns the session for state if present and not expired, and removes expired entries.
+// Get returns the session for state if present and not expired, and deletes the entry when expired.
 func (s *ChallengeStateStore) Get(state string) (ChallengeSession, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

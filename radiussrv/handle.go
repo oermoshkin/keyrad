@@ -114,7 +114,7 @@ func (s *Server) handleUser(p *packet, kcCtx context.Context) {
 		resp = radius.New(radius.CodeAccessAccept, p.secret)
 		s.addScopeAttributes(resp, roles, p.requestID)
 	} else {
-		log.Debug("PAP failed", zap.String("username", p.username), zap.String("password", p.password), zap.Error(err))
+		log.Debug("PAP failed", zap.String("username", p.username), zap.Error(err))
 		resp = radius.New(radius.CodeAccessReject, p.secret)
 	}
 	s.writePAPResponse(p, resp)
@@ -146,14 +146,9 @@ func (s *Server) handleUserOTP(p *packet, kcCtx context.Context) {
 				log.Debug("OTP challenge success", zap.String("username", sess.Username), zap.Any("roles", roles))
 			} else {
 				resp = radius.New(radius.CodeAccessReject, p.secret)
-				log.Debug("OTP challenge failed", zap.String("username", sess.Username), zap.String("password", sess.Password), zap.Error(err))
+				log.Debug("OTP challenge failed", zap.String("username", sess.Username), zap.Error(err))
 			}
-			resp.Identifier = p.packet.Identifier
-			resp.Authenticator = p.packet.Authenticator
-			b, err := resp.Encode()
-			if err == nil {
-				p.conn.WriteTo(b, p.addr)
-			}
+			s.writePAPResponse(p, resp)
 			s.ChallengeStateStore.Delete(state)
 			return
 		}
@@ -175,9 +170,6 @@ func (s *Server) handleUserOTP(p *packet, kcCtx context.Context) {
 		resp.Authenticator = p.packet.Authenticator
 		resp.Add(18, []byte(s.OTPChallengeMsg))
 		resp.Add(24, []byte(state)) // State attribute
-		b, err := resp.Encode()
-		if err == nil {
-			p.conn.WriteTo(b, p.addr)
-		}
+		s.writePAPResponse(p, resp)
 	}
 }

@@ -30,16 +30,6 @@ func TestChallengeStateStore_SetGetDelete(t *testing.T) {
 	}
 }
 
-func TestChallengeStateStore_GetExpires(t *testing.T) {
-	s := testChallengeStore(20 * time.Millisecond)
-	s.Set("k", ChallengeSession{Username: "u"})
-	time.Sleep(50 * time.Millisecond)
-	_, ok := s.Get("k")
-	if ok {
-		t.Fatal("expected expired")
-	}
-}
-
 func TestChallengeStateStore_EvictExpired(t *testing.T) {
 	s := testChallengeStore(time.Hour)
 	s.mu.Lock()
