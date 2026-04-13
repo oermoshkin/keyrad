@@ -81,21 +81,9 @@ func (s *Server) worker() {
 			continue
 		}
 
-		for key, cfg := range s.Clients {
-			s.Logger.Debug("checking client", zap.String("key", key))
-			// Try as CIDR
-			_, ipnet, err := net.ParseCIDR(key)
-			if err == nil && ipnet.Contains(udpAddr.IP) {
-				secret = cfg.Secret
-				s.Logger.Debug("matched CIDR", zap.String("key", key), zap.String("ip", udpAddr.IP.String()))
-				break
-			}
-			// Try as single IP
-			if net.ParseIP(key) != nil && net.ParseIP(key).Equal(udpAddr.IP) {
-				secret = cfg.Secret
-				s.Logger.Debug("matched ip", zap.String("key", key), zap.String("ip", udpAddr.IP.String()))
-				break
-			}
+		secret = resolveClientSecret(s.Clients, udpAddr.IP)
+		if secret != "" {
+			s.Logger.Debug("matched client", zap.String("ip", udpAddr.IP.String()))
 		}
 
 		if secret == "" {
@@ -107,6 +95,15 @@ func (s *Server) worker() {
 		if err != nil {
 			s.Logger.Debug("error parsing packet", zap.Error(err))
 			continue
+		}
+
+		if !s.DisableMsgAuth {
+			if err := VerifyMessageAuthenticator(job.packetData, []byte(secret)); err != nil {
+				s.Logger.Debug("message-authenticator verification failed",
+					zap.String("ip", udpAddr.IP.String()),
+					zap.Error(err))
+				continue
+			}
 		}
 
 		pkt := newPacket(reqPacket, job.remoteAddr, job.conn, []byte(secret))

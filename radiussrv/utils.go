@@ -1,10 +1,9 @@
 package radiussrv
 
 import (
-	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	"net"
 	"strconv"
 	"time"
 
@@ -30,31 +29,27 @@ func (s *Server) withRequest(p *packet) *zap.Logger {
 	return s.Logger.With(zap.String("request_id", p.requestID))
 }
 
-// decryptUserPassword reverses RADIUS PAP User-Password encryption (RFC 2865) using the
-// Request Authenticator and shared secret.
-func decryptUserPassword(encrypted, authenticator, secret []byte) ([]byte, error) {
-	if len(encrypted)%16 != 0 {
-		return nil, fmt.Errorf("invalid encrypted User-Password length")
-	}
-	b := make([]byte, len(encrypted))
-	last := authenticator
-	for i := 0; i < len(encrypted); i += 16 {
-		h := md5.New()
-		h.Write(secret)
-		h.Write(last)
-		xor := h.Sum(nil)
-		for j := 0; j < 16; j++ {
-			b[i+j] = encrypted[i+j] ^ xor[j]
-		}
-		last = encrypted[i : i+16]
-	}
-	// Remove padding
-	for i := len(b) - 1; i >= 0; i-- {
-		if b[i] == 0 {
-			b = b[:i]
-		} else {
-			break
+// resolveClientSecret picks the shared secret for ip: an exact ipaddr key wins; otherwise
+// the most specific matching CIDR (longest prefix) is used so map iteration order cannot
+// pick a wrong secret when several clients overlap.
+func resolveClientSecret(clients map[string]ClientConfig, ip net.IP) string {
+	for key, cfg := range clients {
+		if host := net.ParseIP(key); host != nil && host.Equal(ip) {
+			return cfg.Secret
 		}
 	}
-	return b, nil
+	var bestSecret string
+	bestOnes := -1
+	for key, cfg := range clients {
+		_, ipnet, err := net.ParseCIDR(key)
+		if err != nil || !ipnet.Contains(ip) {
+			continue
+		}
+		ones, _ := ipnet.Mask.Size()
+		if ones > bestOnes {
+			bestOnes = ones
+			bestSecret = cfg.Secret
+		}
+	}
+	return bestSecret
 }

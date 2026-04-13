@@ -2,7 +2,6 @@ package radiussrv
 
 import (
 	"bytes"
-	"crypto/md5"
 	"net"
 	"testing"
 
@@ -32,43 +31,32 @@ func TestWithRequest(t *testing.T) {
 	}
 }
 
-// radiusEncryptUserPassword applies RFC 2865 User-Password hiding for tests.
-func radiusEncryptUserPassword(plain, authenticator, secret []byte) []byte {
-	nPad := (16 - len(plain)%16) % 16
-	padded := append(append([]byte(nil), plain...), make([]byte, nPad)...)
-	out := make([]byte, len(padded))
-	last := authenticator
-	for i := 0; i < len(padded); i += 16 {
-		h := md5.New()
-		h.Write(secret)
-		h.Write(last)
-		xor := h.Sum(nil)
-		for j := 0; j < 16; j++ {
-			out[i+j] = padded[i+j] ^ xor[j]
-		}
-		last = out[i : i+16]
-	}
-	return out
-}
-
-func TestDecryptUserPassword_RoundTrip(t *testing.T) {
-	auth := bytes.Repeat([]byte{0x03}, 16)
-	secret := []byte("shared")
-	plain := []byte("hunter2")
-
-	enc := radiusEncryptUserPassword(plain, auth, secret)
-	got, err := decryptUserPassword(enc, auth, secret)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("got %q want %q", got, plain)
-	}
-}
-
-func TestDecryptUserPassword_InvalidLength(t *testing.T) {
-	_, err := decryptUserPassword([]byte{1, 2, 3}, bytes.Repeat([]byte{1}, 16), []byte("s"))
+func TestUserPassword_InvalidLength(t *testing.T) {
+	_, err := radius.UserPassword([]byte{1, 2, 3}, []byte("s"), bytes.Repeat([]byte{1}, 16))
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestResolveClientSecret_ExactIPWinsOverBroadCIDR(t *testing.T) {
+	ip := net.ParseIP("10.0.0.5")
+	clients := map[string]ClientConfig{
+		"10.0.0.0/8":  {Secret: "broad"},
+		"10.0.0.5":    {Secret: "exact"},
+		"10.0.0.0/24": {Secret: "medium"},
+	}
+	if got := resolveClientSecret(clients, ip); got != "exact" {
+		t.Fatalf("got %q want exact", got)
+	}
+}
+
+func TestResolveClientSecret_MostSpecificCIDR(t *testing.T) {
+	ip := net.ParseIP("10.0.0.5")
+	clients := map[string]ClientConfig{
+		"10.0.0.0/8":  {Secret: "broad"},
+		"10.0.0.0/24": {Secret: "narrow"},
+	}
+	if got := resolveClientSecret(clients, ip); got != "narrow" {
+		t.Fatalf("got %q want narrow", got)
 	}
 }
