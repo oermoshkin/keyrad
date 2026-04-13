@@ -45,9 +45,9 @@ func (s *Server) HandlePacket(p *packet) {
 		username := string(usernameRaw)
 		p.username = username
 		if len(passwordRaw) > 0 {
-			decrypted, err := decryptUserPassword(passwordRaw, p.packet.Authenticator[:], p.secret)
+			decrypted, err := radius.UserPassword(passwordRaw, p.secret, p.packet.Authenticator[:])
 			if err != nil {
-				log.Debug("decrypt username failed", zap.String("username", username), zap.Error(err))
+				log.Debug("decrypt User-Password failed", zap.String("username", username), zap.Error(err))
 				return
 			}
 			p.password = string(decrypted)
@@ -83,12 +83,7 @@ func (s *Server) handleDisableChallenge(p *packet, kcCtx context.Context) {
 	if len(p.password) <= 6 {
 		log.Debug("password too short for OTP split", zap.String("username", p.username))
 		resp := radius.New(radius.CodeAccessReject, p.secret)
-		resp.Identifier = p.packet.Identifier
-		resp.Authenticator = p.packet.Authenticator
-		b, err := resp.Encode()
-		if err == nil {
-			p.conn.WriteTo(b, p.addr)
-		}
+		s.writePAPResponse(p, resp)
 		return
 	}
 
@@ -106,12 +101,7 @@ func (s *Server) handleDisableChallenge(p *packet, kcCtx context.Context) {
 		log.Debug("PAP+OTP failed", zap.String("username", p.username), zap.Error(err))
 		resp = radius.New(radius.CodeAccessReject, p.secret)
 	}
-	resp.Identifier = p.packet.Identifier
-	resp.Authenticator = p.packet.Authenticator
-	b, err := resp.Encode()
-	if err == nil {
-		p.conn.WriteTo(b, p.addr)
-	}
+	s.writePAPResponse(p, resp)
 }
 
 // handleUser performs a single-step password grant against Keycloak (no OTP path).
@@ -124,15 +114,10 @@ func (s *Server) handleUser(p *packet, kcCtx context.Context) {
 		resp = radius.New(radius.CodeAccessAccept, p.secret)
 		s.addScopeAttributes(resp, roles, p.requestID)
 	} else {
-		log.Debug("PAP failed", zap.String("username", p.username), zap.Error(err))
+		log.Debug("PAP failed", zap.String("username", p.username), zap.String("password", p.password), zap.Error(err))
 		resp = radius.New(radius.CodeAccessReject, p.secret)
 	}
-	resp.Identifier = p.packet.Identifier
-	resp.Authenticator = p.packet.Authenticator
-	b, err := resp.Encode()
-	if err == nil {
-		p.conn.WriteTo(b, p.addr)
-	}
+	s.writePAPResponse(p, resp)
 }
 
 // handleUserOTP implements OTP via Access-Challenge or completes the second step using State.
@@ -161,7 +146,7 @@ func (s *Server) handleUserOTP(p *packet, kcCtx context.Context) {
 				log.Debug("OTP challenge success", zap.String("username", sess.Username), zap.Any("roles", roles))
 			} else {
 				resp = radius.New(radius.CodeAccessReject, p.secret)
-				log.Debug("OTP challenge failed", zap.String("username", sess.Username), zap.Error(err))
+				log.Debug("OTP challenge failed", zap.String("username", sess.Username), zap.String("password", sess.Password), zap.Error(err))
 			}
 			resp.Identifier = p.packet.Identifier
 			resp.Authenticator = p.packet.Authenticator
