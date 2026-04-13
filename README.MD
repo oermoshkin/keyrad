@@ -154,6 +154,10 @@ radtest testuser password 127.0.0.1 0 test
 - **OTP not working**: Ensure user has the credential enrolled in Keycloak.
 - **Legacy OTP**: If your client cannot handle RADIUS challenge-response, use `--disable-challenge-response`.
 
+## Known issues
+- The password is more than 16 characters. 
+Some devices use RADIUS 1.0 (RFC 2138), which limits passwords to 16 characters. For example: Checkpoint version < R81.10.00 - https://support.checkpoint.com/results/sk/sk13740
+
 ## Support
 If you need professional support, please write to
 
