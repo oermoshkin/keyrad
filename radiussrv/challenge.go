@@ -25,7 +25,7 @@ type challengeEntry struct {
 
 // ChallengeStateStore maps opaque State attribute values to sessions with a fixed TTL.
 type ChallengeStateStore struct {
-	mu  sync.Mutex
+	mu  sync.RWMutex
 	m   map[string]challengeEntry
 	ttl time.Duration
 }
@@ -42,14 +42,10 @@ func NewChallengeStateStore() *ChallengeStateStore {
 
 // Get returns the session for state if present and not expired, and removes expired entries.
 func (s *ChallengeStateStore) Get(state string) (ChallengeSession, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	e, ok := s.m[state]
 	if !ok {
-		return ChallengeSession{}, false
-	}
-	if time.Now().After(e.expires) {
-		delete(s.m, state)
 		return ChallengeSession{}, false
 	}
 	return e.sess, true
