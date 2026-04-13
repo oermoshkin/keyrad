@@ -13,9 +13,13 @@ func TestNewPacket_RequestID(t *testing.T) {
 	p := radius.New(radius.CodeAccessRequest, []byte("secret"))
 	p.Identifier = 7
 	p.Authenticator = [16]byte(bytes.Repeat([]byte{1}, 16))
+	p.Add(CallingStationIDType, []byte("AA-BB-CC-DD-EE-FF"))
 	pkt := newPacket(p, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1812}, nil, []byte("secret"))
 	if len(pkt.requestID) != 16 {
 		t.Fatalf("request_id hex length: got %d want 16", len(pkt.requestID))
+	}
+	if pkt.callingStationID != "AA-BB-CC-DD-EE-FF" {
+		t.Fatalf("calling_station_id: got %q", pkt.callingStationID)
 	}
 }
 

@@ -14,7 +14,9 @@ import (
 const (
 	// MessageAuthenticatorType is the RADIUS attribute type for Message-Authenticator (RFC 3579).
 	MessageAuthenticatorType = 80
-	workerCount              = 8
+	// CallingStationIDType is Calling-Station-Id (RFC 2865).
+	CallingStationIDType = 31
+	workerCount          = 8
 )
 
 // Server wires Keycloak, RADIUS clients, scope-to-attribute mapping, and OTP challenge state.

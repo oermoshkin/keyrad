@@ -13,24 +13,26 @@ import (
 // packet carries a parsed RADIUS request, peer address, UDP socket, secret, decrypted PAP fields,
 // and a per-request correlation id for logging.
 type packet struct {
-	packet    *radius.Packet
-	addr      net.Addr
-	conn      *net.UDPConn
-	secret    []byte
-	username  string
-	password  string
-	requestID string
+	packet           *radius.Packet
+	addr             net.Addr
+	conn             *net.UDPConn
+	secret           []byte
+	username         string
+	password         string
+	requestID        string
+	callingStationID string
 }
 
 // newPacket wraps a parsed RADIUS packet with connection context, shared secret bytes,
 // and a new random request_id used for structured logging across the handler pipeline.
 func newPacket(p *radius.Packet, addr net.Addr, conn *net.UDPConn, secret []byte) *packet {
 	return &packet{
-		packet:    p,
-		addr:      addr,
-		conn:      conn,
-		secret:    secret,
-		requestID: newRequestID(),
+		packet:           p,
+		addr:             addr,
+		conn:             conn,
+		secret:           secret,
+		requestID:        newRequestID(),
+		callingStationID: string(p.Get(CallingStationIDType)),
 	}
 }
 

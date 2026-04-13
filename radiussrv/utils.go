@@ -26,7 +26,11 @@ func (s *Server) withRequest(p *packet) *zap.Logger {
 	if p == nil || p.requestID == "" {
 		return s.Logger
 	}
-	return s.Logger.With(zap.String("request_id", p.requestID))
+	log := s.Logger.With(zap.String("request_id", p.requestID))
+	if p.callingStationID != "" {
+		log = log.With(zap.String("calling_station_id", p.callingStationID))
+	}
+	return log
 }
 
 // resolveClientSecret picks the shared secret for ip: an exact ipaddr key wins; otherwise
