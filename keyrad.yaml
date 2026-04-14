@@ -42,4 +42,4 @@ scope_radius_map:
     - attribute: 11       # Filter-Id
       value: "group-member"
 
-listen_addr: "0.0.0.0:1812"
+listen_addr: "127.0.0.1:1812"
